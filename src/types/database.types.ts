@@ -18,17 +18,20 @@ export interface Database {
           id: string;
           full_name: string;
           default_pix_key: string | null;
+          avatar_url: string | null;
           created_at: string;
         };
         Insert: {
           id: string;
           full_name: string;
           default_pix_key?: string | null;
+          avatar_url?: string | null;
           created_at?: string;
         };
         Update: {
           full_name?: string;
           default_pix_key?: string | null;
+          avatar_url?: string | null;
         };
         Relationships: [];
       };

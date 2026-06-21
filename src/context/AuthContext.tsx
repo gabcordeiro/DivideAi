@@ -8,13 +8,19 @@ import {
 } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
+import { uploadAvatar } from '@/lib/storage';
 
 interface AuthContextValue {
   session: Session | null;
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, fullName: string) => Promise<void>;
+  signUp: (
+    email: string,
+    password: string,
+    fullName: string,
+    avatarFile?: File | null,
+  ) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -44,15 +50,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }
 
-  async function signUp(email: string, password: string, fullName: string) {
+  async function signUp(
+    email: string,
+    password: string,
+    fullName: string,
+    avatarFile?: File | null,
+  ) {
     // `full_name` vai em options.data para o trigger handle_new_user()
     // criar a linha correspondente em public.users.
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: { data: { full_name: fullName } },
     });
     if (error) throw error;
+
+    // O upload exige sessão (RLS do Storage). Se a confirmação de e-mail
+    // estiver ativada, não há sessão ainda — nesse caso o avatar é ignorado
+    // aqui e pode ser enviado depois, na tela de perfil.
+    if (avatarFile && data.user && data.session) {
+      const avatarUrl = await uploadAvatar(data.user.id, avatarFile);
+      await supabase.from('users').update({ avatar_url: avatarUrl }).eq('id', data.user.id);
+    }
   }
 
   async function signOut() {

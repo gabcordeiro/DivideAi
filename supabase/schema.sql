@@ -13,8 +13,12 @@ create table if not exists public.users (
   id              uuid primary key references auth.users (id) on delete cascade,
   full_name       text not null,
   default_pix_key text,
+  avatar_url      text,
   created_at      timestamptz not null default now()
 );
+
+-- Caso a tabela já exista de uma execução anterior, garante a coluna nova.
+alter table public.users add column if not exists avatar_url text;
 
 -- Eventos (viagens, festas, churrascos...).
 create table if not exists public.events (
@@ -301,3 +305,47 @@ alter publication supabase_realtime add table public.participants;
 alter table public.events       replica identity full;
 alter table public.items        replica identity full;
 alter table public.participants replica identity full;
+
+
+-- -----------------------------------------------------------------------------
+-- 6. STORAGE — avatares dos usuários
+-- -----------------------------------------------------------------------------
+
+-- Bucket público para as fotos de perfil.
+insert into storage.buckets (id, name, public)
+values ('avatars', 'avatars', true)
+on conflict (id) do nothing;
+
+-- Leitura pública das imagens (para exibir o avatar em qualquer lugar do app).
+drop policy if exists "avatars_public_read" on storage.objects;
+create policy "avatars_public_read"
+  on storage.objects for select
+  using (bucket_id = 'avatars');
+
+-- Cada usuário só escreve dentro da PRÓPRIA pasta: avatars/<uid>/...
+drop policy if exists "avatars_insert_own" on storage.objects;
+create policy "avatars_insert_own"
+  on storage.objects for insert
+  to authenticated
+  with check (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "avatars_update_own" on storage.objects;
+create policy "avatars_update_own"
+  on storage.objects for update
+  to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "avatars_delete_own" on storage.objects;
+create policy "avatars_delete_own"
+  on storage.objects for delete
+  to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
