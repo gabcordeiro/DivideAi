@@ -1,0 +1,38 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Build output
+dist
+dist-ssr
+*.local
+*.tsbuildinfo
+
+# Environment variables — segredos NUNCA vão pro git.
+# Exceções: .env.example (template) e .env.production (somente a anon key
+# PÚBLICA, necessária no build do Vite na Vercel; o acesso é protegido por RLS).
+.env
+.env.*
+!.env.example
+!.env.production
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+Thumbs.db
