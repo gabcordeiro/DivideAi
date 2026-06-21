@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -9,10 +10,12 @@ import {
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 import { uploadAvatar } from '@/lib/storage';
+import type { UserProfile } from '@/types/database.types';
 
 interface AuthContextValue {
   session: Session | null;
   user: User | null;
+  profile: UserProfile | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (
@@ -22,13 +25,17 @@ interface AuthContextValue {
     avatarFile?: File | null,
   ) => Promise<void>;
   signOut: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const userId = session?.user?.id ?? null;
 
   useEffect(() => {
     // Sessão inicial (ao recarregar a página).
@@ -44,6 +51,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  const refreshProfile = useCallback(async () => {
+    if (!userId) {
+      setProfile(null);
+      return;
+    }
+    const { data } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
+    setProfile(data ?? null);
+  }, [userId]);
+
+  // Carrega o perfil sempre que o usuário logado muda.
+  useEffect(() => {
+    refreshProfile();
+  }, [refreshProfile]);
 
   async function signIn(email: string, password: string) {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -83,12 +104,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       session,
       user: session?.user ?? null,
+      profile,
       loading,
       signIn,
       signUp,
       signOut,
+      refreshProfile,
     }),
-    [session, loading],
+    [session, profile, loading, refreshProfile],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -2,15 +2,18 @@ import { Link, useNavigate } from 'react-router-dom';
 import { LogOut, Wallet } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/Button';
+import { Avatar } from '@/components/ui/Avatar';
 
 export function Header() {
-  const { user, signOut } = useAuth();
+  const { user, profile, signOut } = useAuth();
   const navigate = useNavigate();
 
   async function handleSignOut() {
     await signOut();
     navigate('/login', { replace: true });
   }
+
+  const displayName = profile?.full_name || user?.email || '';
 
   return (
     <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/80 backdrop-blur">
@@ -24,7 +27,10 @@ export function Header() {
 
         {user && (
           <div className="flex items-center gap-3">
-            <span className="hidden text-sm text-slate-500 sm:inline">{user.email}</span>
+            <div className="hidden items-center gap-2 sm:flex">
+              <Avatar name={displayName} url={profile?.avatar_url} size={32} />
+              <span className="max-w-[12rem] truncate text-sm text-slate-600">{displayName}</span>
+            </div>
             <Button variant="ghost" size="sm" onClick={handleSignOut}>
               <LogOut className="h-4 w-4" />
               Sair

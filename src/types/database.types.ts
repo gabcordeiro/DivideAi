@@ -8,6 +8,7 @@
  */
 
 export type EventStatus = 'voting' | 'collecting' | 'finished';
+export type TreasurerMode = 'vote' | 'direct';
 export type PaymentStatus = 'pending' | 'paid_unconfirmed' | 'confirmed';
 
 export interface Database {
@@ -44,6 +45,7 @@ export interface Database {
           treasurer_id: string | null;
           treasurer_pix_key: string | null;
           status: EventStatus;
+          treasurer_mode: TreasurerMode;
           created_at: string;
         };
         Insert: {
@@ -54,6 +56,7 @@ export interface Database {
           treasurer_id?: string | null;
           treasurer_pix_key?: string | null;
           status?: EventStatus;
+          treasurer_mode?: TreasurerMode;
           created_at?: string;
         };
         Update: {
@@ -62,6 +65,7 @@ export interface Database {
           treasurer_id?: string | null;
           treasurer_pix_key?: string | null;
           status?: EventStatus;
+          treasurer_mode?: TreasurerMode;
         };
         Relationships: [];
       };
@@ -109,6 +113,26 @@ export interface Database {
         };
         Relationships: [];
       };
+      messages: {
+        Row: {
+          id: string;
+          event_id: string;
+          user_id: string;
+          content: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          event_id: string;
+          user_id: string;
+          content: string;
+          created_at?: string;
+        };
+        Update: {
+          content?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -132,8 +156,12 @@ export type UserProfile = Database['public']['Tables']['users']['Row'];
 export type EventRow = Database['public']['Tables']['events']['Row'];
 export type ItemRow = Database['public']['Tables']['items']['Row'];
 export type ParticipantRow = Database['public']['Tables']['participants']['Row'];
+export type MessageRow = Database['public']['Tables']['messages']['Row'];
+
+/** Perfil resumido usado em listas, votação e chat. */
+export type PublicProfile = Pick<UserProfile, 'id' | 'full_name' | 'avatar_url'>;
 
 /** Participante já com o perfil do usuário embutido (join). */
 export interface ParticipantWithProfile extends ParticipantRow {
-  user: Pick<UserProfile, 'id' | 'full_name'>;
+  user: PublicProfile;
 }

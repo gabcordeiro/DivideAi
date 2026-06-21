@@ -11,6 +11,8 @@ import {
   ShoppingCart,
   Users,
   Trophy,
+  PartyPopper,
+  CheckCheck,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/context/AuthContext';
@@ -20,10 +22,14 @@ import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Spinner } from '@/components/ui/Spinner';
 import { StatusBadge } from '@/components/ui/StatusBadge';
+import { Avatar } from '@/components/ui/Avatar';
+import { EventChat } from '@/components/event/EventChat';
+import { InvitePeople } from '@/components/event/InvitePeople';
 import type {
   EventRow,
   ItemRow,
   ParticipantWithProfile,
+  PublicProfile,
   UserProfile,
 } from '@/types/database.types';
 
@@ -39,9 +45,9 @@ export function EventDetails() {
   const [error, setError] = useState<string | null>(null);
   const [notMember, setNotMember] = useState(false);
 
-  /* --------------------------------------------------------------------- *
-   * Carregamento dos dados do evento (evento + itens + participantes)
-   * --------------------------------------------------------------------- */
+  /* ------------------------------------------------------------------ *
+   * Carregamento (evento + itens + participantes + meu perfil)
+   * ------------------------------------------------------------------ */
   const fetchAll = useCallback(async () => {
     if (!eventId || !user) return;
 
@@ -50,14 +56,13 @@ export function EventDetails() {
       supabase.from('items').select('*').eq('event_id', eventId).order('created_at'),
       supabase
         .from('participants')
-        .select('*, user:users!participants_user_id_fkey(id, full_name)')
+        .select('*, user:users!participants_user_id_fkey(id, full_name, avatar_url)')
         .eq('event_id', eventId)
         .order('created_at')
         .returns<ParticipantWithProfile[]>(),
       supabase.from('users').select('*').eq('id', user.id).maybeSingle(),
     ]);
 
-    // Se o RLS bloqueou o evento, o usuário ainda não é participante.
     if (!eventRes.data) {
       setNotMember(true);
       setLoading(false);
@@ -72,10 +77,9 @@ export function EventDetails() {
     setLoading(false);
   }, [eventId, user]);
 
-  /* --------------------------------------------------------------------- *
-   * Realtime: re-busca os dados sempre que algo do evento muda no banco.
-   * Um único canal escuta as 3 tabelas filtradas por este evento.
-   * --------------------------------------------------------------------- */
+  /* ------------------------------------------------------------------ *
+   * Realtime: re-busca em qualquer mudança do evento.
+   * ------------------------------------------------------------------ */
   useEffect(() => {
     if (!eventId) return;
     fetchAll();
@@ -104,9 +108,9 @@ export function EventDetails() {
     };
   }, [eventId, fetchAll]);
 
-  /* --------------------------------------------------------------------- *
+  /* ------------------------------------------------------------------ *
    * Valores derivados
-   * --------------------------------------------------------------------- */
+   * ------------------------------------------------------------------ */
   const me = useMemo(
     () => participants.find((p) => p.user_id === user?.id) ?? null,
     [participants, user],
@@ -115,7 +119,11 @@ export function EventDetails() {
   const isTreasurer = !!event && !!user && event.treasurer_id === user.id;
   const perPerson = splitPerPerson(event?.total_amount ?? 0, participants.length || 1);
 
-  /** Contagem de votos por candidato (user_id votado). */
+  const profilesById = useMemo<Record<string, PublicProfile>>(
+    () => Object.fromEntries(participants.map((p) => [p.user_id, p.user])),
+    [participants],
+  );
+
   const voteCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const p of participants) {
@@ -124,9 +132,9 @@ export function EventDetails() {
     return counts;
   }, [participants]);
 
-  /* --------------------------------------------------------------------- *
+  /* ------------------------------------------------------------------ *
    * Ações
-   * --------------------------------------------------------------------- */
+   * ------------------------------------------------------------------ */
   async function joinEvent() {
     if (!eventId || !user) return;
     setError(null);
@@ -145,14 +153,11 @@ export function EventDetails() {
       .update({ voted_for_id: candidateUserId })
       .eq('id', me.id);
     if (err) setError(err.message);
-    // A UI atualiza via Realtime.
   }
 
   async function closeVoting() {
     if (!event) return;
     setError(null);
-
-    // Elege o mais votado (empate → primeiro encontrado).
     let winner: string | null = null;
     let max = -1;
     for (const [uid, count] of voteCounts) {
@@ -162,14 +167,22 @@ export function EventDetails() {
       }
     }
     if (!winner) return setError('Ninguém votou ainda — peça para a galera votar.');
-
-    // O trigger `confirm_treasurer_payment` no banco marca automaticamente o
-    // pagamento do tesoureiro como confirmado (ele guarda o dinheiro).
-    const { error: evErr } = await supabase
+    const { error: err } = await supabase
       .from('events')
       .update({ treasurer_id: winner, status: 'collecting' })
       .eq('id', event.id);
-    if (evErr) return setError(evErr.message);
+    if (err) setError(err.message);
+  }
+
+  /** Modo "Eu defino": o criador escolhe/troca o tesoureiro diretamente. */
+  async function assignTreasurer(userId: string) {
+    if (!event) return;
+    setError(null);
+    const { error: err } = await supabase
+      .from('events')
+      .update({ treasurer_id: userId, status: 'collecting' })
+      .eq('id', event.id);
+    if (err) setError(err.message);
   }
 
   async function markAsPaid() {
@@ -191,9 +204,19 @@ export function EventDetails() {
     if (err) setError(err.message);
   }
 
-  /* --------------------------------------------------------------------- *
-   * Renderização
-   * --------------------------------------------------------------------- */
+  async function finishEvent() {
+    if (!event) return;
+    setError(null);
+    const { error: err } = await supabase
+      .from('events')
+      .update({ status: 'finished' })
+      .eq('id', event.id);
+    if (err) setError(err.message);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Render
+   * ------------------------------------------------------------------ */
   if (loading) return <Spinner label="Carregando evento…" />;
 
   if (notMember) {
@@ -212,6 +235,9 @@ export function EventDetails() {
 
   if (!event) return <p className="text-slate-500">Evento não encontrado.</p>;
 
+  const canAssignTreasurer =
+    isCreator && event.treasurer_mode === 'direct' && event.status !== 'finished';
+
   return (
     <div className="space-y-6">
       <Link
@@ -224,12 +250,22 @@ export function EventDetails() {
 
       {/* Cabeçalho */}
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-extrabold">{event.title}</h1>
-          <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-500">
-            <Users className="h-4 w-4" />
-            {participants.length} participante(s)
-          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <div className="flex -space-x-2">
+              {participants.slice(0, 5).map((p) => (
+                <Avatar
+                  key={p.id}
+                  name={p.user.full_name}
+                  url={p.user.avatar_url}
+                  size={28}
+                  className="ring-2 ring-white"
+                />
+              ))}
+            </div>
+            <span className="text-sm text-slate-500">{participants.length} participante(s)</span>
+          </div>
         </div>
         <div className="text-right">
           <p className="text-xs uppercase tracking-wide text-slate-400">Total</p>
@@ -239,7 +275,14 @@ export function EventDetails() {
         </div>
       </div>
 
-      {/* Lista de itens */}
+      {event.status === 'finished' && (
+        <div className="flex items-center gap-2 rounded-xl bg-brand-50 px-4 py-3 text-brand-800">
+          <PartyPopper className="h-5 w-5" />
+          <span className="text-sm font-semibold">Evento finalizado! Conta fechada. 🎉</span>
+        </div>
+      )}
+
+      {/* Itens */}
       <Card>
         <h2 className="mb-3 flex items-center gap-2 font-semibold">
           <ShoppingCart className="h-4 w-4 text-slate-500" />
@@ -255,75 +298,65 @@ export function EventDetails() {
         </ul>
       </Card>
 
+      {/* Convite */}
+      <InvitePeople
+        eventId={event.id}
+        eventTitle={event.title}
+        isCreator={isCreator}
+        existingUserIds={participants.map((p) => p.user_id)}
+        onAdded={fetchAll}
+      />
+
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-      {/* ETAPA 1 — VOTAÇÃO DO TESOUREIRO */}
-      {event.status === 'voting' && (
-        <Card className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Vote className="h-5 w-5 text-brand-600" />
-            <h2 className="font-semibold">Vote no tesoureiro</h2>
-          </div>
-          <p className="text-sm text-slate-500">
-            Escolha quem vai guardar o dinheiro e receber os Pix.
-          </p>
+      {/* ETAPA 1 — definição do tesoureiro */}
+      {event.status === 'voting' && event.treasurer_mode === 'vote' && (
+        <VotingCard
+          participants={participants}
+          voteCounts={voteCounts}
+          myVote={me?.voted_for_id ?? null}
+          canVote={!!me}
+          isCreator={isCreator}
+          onVote={castVote}
+          onClose={closeVoting}
+        />
+      )}
 
-          <ul className="space-y-2">
-            {participants.map((p) => {
-              const votes = voteCounts.get(p.user_id) ?? 0;
-              const isMyVote = me?.voted_for_id === p.user_id;
-              return (
+      {event.status === 'voting' && event.treasurer_mode === 'direct' && (
+        <Card className="space-y-3">
+          <h2 className="flex items-center gap-2 font-semibold">
+            <Crown className="h-5 w-5 text-amber-500" /> Definir tesoureiro
+          </h2>
+          {isCreator ? (
+            <ul className="space-y-2">
+              {participants.map((p) => (
                 <li
                   key={p.id}
-                  className={`flex items-center justify-between rounded-xl border p-3 transition ${
-                    isMyVote ? 'border-brand-400 bg-brand-50' : 'border-slate-200'
-                  }`}
+                  className="flex items-center justify-between rounded-xl border border-slate-200 p-3"
                 >
                   <div className="flex items-center gap-2">
+                    <Avatar name={p.user.full_name} url={p.user.avatar_url} size={32} />
                     <span className="font-medium">{p.user.full_name}</span>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                      {votes} voto(s)
-                    </span>
                   </div>
-                  <Button
-                    size="sm"
-                    variant={isMyVote ? 'primary' : 'secondary'}
-                    onClick={() => castVote(p.user_id)}
-                    disabled={!me}
-                  >
-                    {isMyVote ? (
-                      <>
-                        <Check className="h-4 w-4" /> Meu voto
-                      </>
-                    ) : (
-                      'Votar'
-                    )}
+                  <Button size="sm" onClick={() => assignTreasurer(p.user_id)}>
+                    Tornar tesoureiro
                   </Button>
                 </li>
-              );
-            })}
-          </ul>
-
-          {isCreator && (
-            <div className="border-t border-slate-200 pt-4">
-              <Button onClick={closeVoting} className="w-full">
-                <Trophy className="h-4 w-4" />
-                Encerrar votação e eleger tesoureiro
-              </Button>
-            </div>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-slate-500">Aguardando o organizador definir o tesoureiro.</p>
           )}
         </Card>
       )}
 
-      {/* ETAPA 2 e 3 — PIX + STATUS DE PAGAMENTO */}
+      {/* ETAPA 2 e 3 — Pix + pagamentos */}
       {event.status !== 'voting' && (
         <>
           <TreasurerPixCard
             event={event}
             isTreasurer={isTreasurer}
-            treasurerName={
-              participants.find((p) => p.user_id === event.treasurer_id)?.user.full_name ?? '—'
-            }
+            treasurer={participants.find((p) => p.user_id === event.treasurer_id)?.user ?? null}
             perPerson={perPerson}
             defaultPixKey={myProfile?.default_pix_key ?? ''}
           />
@@ -333,28 +366,118 @@ export function EventDetails() {
             currentUserId={user?.id ?? ''}
             treasurerId={event.treasurer_id}
             isTreasurer={isTreasurer}
+            finished={event.status === 'finished'}
+            canAssignTreasurer={canAssignTreasurer}
             onMarkPaid={markAsPaid}
             onConfirm={confirmReceipt}
+            onAssignTreasurer={assignTreasurer}
           />
+
+          {event.status === 'collecting' && (isCreator || isTreasurer) && (
+            <Button variant="secondary" className="w-full" onClick={finishEvent}>
+              <CheckCheck className="h-4 w-4" />
+              Finalizar evento
+            </Button>
+          )}
         </>
       )}
+
+      {/* Chat */}
+      {me && <EventChat eventId={event.id} currentUserId={user?.id ?? ''} profiles={profilesById} />}
     </div>
   );
 }
 
 /* ===================================================================== *
- * Cartão do tesoureiro / chave Pix
+ * Votação
+ * ===================================================================== */
+function VotingCard({
+  participants,
+  voteCounts,
+  myVote,
+  canVote,
+  isCreator,
+  onVote,
+  onClose,
+}: {
+  participants: ParticipantWithProfile[];
+  voteCounts: Map<string, number>;
+  myVote: string | null;
+  canVote: boolean;
+  isCreator: boolean;
+  onVote: (userId: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Card className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Vote className="h-5 w-5 text-brand-600" />
+        <h2 className="font-semibold">Vote no tesoureiro</h2>
+      </div>
+      <p className="text-sm text-slate-500">Escolha quem vai guardar o dinheiro e receber os Pix.</p>
+
+      <ul className="space-y-2">
+        {participants.map((p) => {
+          const votes = voteCounts.get(p.user_id) ?? 0;
+          const isMyVote = myVote === p.user_id;
+          return (
+            <li
+              key={p.id}
+              className={`flex items-center justify-between rounded-xl border p-3 transition ${
+                isMyVote ? 'border-brand-400 bg-brand-50' : 'border-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Avatar name={p.user.full_name} url={p.user.avatar_url} size={32} />
+                <span className="font-medium">{p.user.full_name}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                  {votes} voto(s)
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant={isMyVote ? 'primary' : 'secondary'}
+                onClick={() => onVote(p.user_id)}
+                disabled={!canVote}
+              >
+                {isMyVote ? (
+                  <>
+                    <Check className="h-4 w-4" /> Meu voto
+                  </>
+                ) : (
+                  'Votar'
+                )}
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+
+      {isCreator && (
+        <div className="border-t border-slate-200 pt-4">
+          <Button onClick={onClose} className="w-full">
+            <Trophy className="h-4 w-4" />
+            Encerrar votação e eleger tesoureiro
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ===================================================================== *
+ * Tesoureiro / chave Pix
  * ===================================================================== */
 function TreasurerPixCard({
   event,
   isTreasurer,
-  treasurerName,
+  treasurer,
   perPerson,
   defaultPixKey,
 }: {
   event: EventRow;
   isTreasurer: boolean;
-  treasurerName: string;
+  treasurer: PublicProfile | null;
   perPerson: number;
   defaultPixKey: string;
 }) {
@@ -383,10 +506,12 @@ function TreasurerPixCard({
     <Card className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Crown className="h-5 w-5 text-amber-500" />
+          <Avatar name={treasurer?.full_name ?? '—'} url={treasurer?.avatar_url} size={40} />
           <div>
-            <p className="text-xs uppercase tracking-wide text-slate-400">Tesoureiro</p>
-            <p className="font-semibold">{treasurerName}</p>
+            <p className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-400">
+              <Crown className="h-3.5 w-3.5 text-amber-500" /> Tesoureiro
+            </p>
+            <p className="font-semibold">{treasurer?.full_name ?? '—'}</p>
           </div>
         </div>
         <div className="text-right">
@@ -422,9 +547,7 @@ function TreasurerPixCard({
             </Button>
           </div>
         ) : (
-          <p className="text-sm text-slate-500">
-            O tesoureiro ainda não cadastrou a chave Pix.
-          </p>
+          <p className="text-sm text-slate-500">O tesoureiro ainda não cadastrou a chave Pix.</p>
         )}
       </div>
     </Card>
@@ -432,29 +555,52 @@ function TreasurerPixCard({
 }
 
 /* ===================================================================== *
- * Cartão de status de pagamento (Realtime)
+ * Status de pagamento (Realtime) + progresso
  * ===================================================================== */
 function PaymentStatusCard({
   participants,
   currentUserId,
   treasurerId,
   isTreasurer,
+  finished,
+  canAssignTreasurer,
   onMarkPaid,
   onConfirm,
+  onAssignTreasurer,
 }: {
   participants: ParticipantWithProfile[];
   currentUserId: string;
   treasurerId: string | null;
   isTreasurer: boolean;
+  finished: boolean;
+  canAssignTreasurer: boolean;
   onMarkPaid: () => void;
   onConfirm: (participantId: string) => void;
+  onAssignTreasurer: (userId: string) => void;
 }) {
+  const confirmed = participants.filter((p) => p.payment_status === 'confirmed').length;
+  const total = participants.length || 1;
+  const pct = Math.round((confirmed / total) * 100);
+
   return (
-    <Card>
-      <h2 className="mb-3 flex items-center gap-2 font-semibold">
-        <HandCoins className="h-4 w-4 text-slate-500" />
-        Quem já pagou
-      </h2>
+    <Card className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 font-semibold">
+          <HandCoins className="h-4 w-4 text-slate-500" />
+          Quem já pagou
+        </h2>
+        <span className="text-sm font-medium text-slate-500">
+          {confirmed}/{total} pagos
+        </span>
+      </div>
+
+      {/* Barra de progresso */}
+      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full bg-brand-500 transition-all duration-500"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
 
       <ul className="space-y-2">
         {participants.map((p) => {
@@ -464,31 +610,44 @@ function PaymentStatusCard({
           return (
             <li
               key={p.id}
-              className="flex items-center justify-between rounded-xl border border-slate-200 p-3"
+              className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 p-3"
             >
-              <div className="flex items-center gap-2">
-                <span className="font-medium">{p.user.full_name}</span>
+              <div className="flex min-w-0 items-center gap-2">
+                <Avatar name={p.user.full_name} url={p.user.avatar_url} size={32} />
+                <span className="truncate font-medium">{p.user.full_name}</span>
                 {isThisTreasurer && (
-                  <Crown className="h-4 w-4 text-amber-500" aria-label="Tesoureiro" />
+                  <Crown className="h-4 w-4 shrink-0 text-amber-500" aria-label="Tesoureiro" />
                 )}
-                {isMe && <span className="text-xs text-slate-400">(você)</span>}
+                {isMe && <span className="shrink-0 text-xs text-slate-400">(você)</span>}
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex shrink-0 items-center gap-2">
                 <StatusBadge status={p.payment_status} />
 
-                {/* Botão "Já paguei" — só para o próprio usuário, quando ainda pendente */}
-                {isMe && !isThisTreasurer && p.payment_status === 'pending' && (
+                {!finished && isMe && !isThisTreasurer && p.payment_status === 'pending' && (
                   <Button size="sm" onClick={onMarkPaid}>
                     Já paguei
                   </Button>
                 )}
 
-                {/* Botão do tesoureiro para confirmar recebimento */}
-                {isTreasurer && !isThisTreasurer && p.payment_status === 'paid_unconfirmed' && (
-                  <Button size="sm" variant="secondary" onClick={() => onConfirm(p.id)}>
-                    <Check className="h-4 w-4" />
-                    Confirmar
+                {!finished &&
+                  isTreasurer &&
+                  !isThisTreasurer &&
+                  p.payment_status === 'paid_unconfirmed' && (
+                    <Button size="sm" variant="secondary" onClick={() => onConfirm(p.id)}>
+                      <Check className="h-4 w-4" />
+                      Confirmar
+                    </Button>
+                  )}
+
+                {canAssignTreasurer && !isThisTreasurer && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onAssignTreasurer(p.user_id)}
+                    title="Tornar tesoureiro"
+                  >
+                    <Crown className="h-4 w-4" />
                   </Button>
                 )}
               </div>

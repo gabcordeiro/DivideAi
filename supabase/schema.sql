@@ -30,8 +30,17 @@ create table if not exists public.events (
   treasurer_pix_key text,
   status            text not null default 'voting'
                       check (status in ('voting', 'collecting', 'finished')),
+  treasurer_mode    text not null default 'vote'
+                      check (treasurer_mode in ('vote', 'direct')),
   created_at        timestamptz not null default now()
 );
+
+-- Garante a coluna nova em bancos criados antes desta feature.
+alter table public.events add column if not exists treasurer_mode text not null default 'vote';
+do $$ begin
+  alter table public.events
+    add constraint events_treasurer_mode_check check (treasurer_mode in ('vote', 'direct'));
+exception when duplicate_object then null; end $$;
 
 -- Itens que serão comprados no evento.
 create table if not exists public.items (
@@ -268,12 +277,19 @@ create policy "participants_select_member"
   to authenticated
   using (public.is_event_participant(event_id));
 
--- Usuário entra no evento por conta própria (insere a si mesmo).
+-- Usuário entra por conta própria (link de convite) OU o criador adiciona alguém.
 drop policy if exists "participants_insert_self" on public.participants;
-create policy "participants_insert_self"
+drop policy if exists "participants_insert_member_or_creator" on public.participants;
+create policy "participants_insert_member_or_creator"
   on public.participants for insert
   to authenticated
-  with check (user_id = auth.uid());
+  with check (
+    user_id = auth.uid()
+    or exists (
+      select 1 from public.events e
+      where e.id = event_id and e.created_by = auth.uid()
+    )
+  );
 
 -- Usuário atualiza a PRÓPRIA linha (voto, "já paguei").
 -- O tesoureiro também pode atualizar (confirmar recebimento dos demais).
@@ -349,3 +365,37 @@ create policy "avatars_delete_own"
     bucket_id = 'avatars'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+
+-- -----------------------------------------------------------------------------
+-- 7. CHAT — mensagens do evento (Realtime)
+-- -----------------------------------------------------------------------------
+
+create table if not exists public.messages (
+  id         uuid primary key default gen_random_uuid(),
+  event_id   uuid not null references public.events (id) on delete cascade,
+  user_id    uuid not null references public.users (id) on delete cascade,
+  content    text not null check (char_length(content) between 1 and 2000),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_messages_event_id on public.messages (event_id, created_at);
+
+alter table public.messages enable row level security;
+
+-- Participantes do evento leem o chat.
+drop policy if exists "messages_select_member" on public.messages;
+create policy "messages_select_member"
+  on public.messages for select
+  to authenticated
+  using (public.is_event_participant(event_id));
+
+-- Participantes enviam mensagens em nome próprio.
+drop policy if exists "messages_insert_member" on public.messages;
+create policy "messages_insert_member"
+  on public.messages for insert
+  to authenticated
+  with check (user_id = auth.uid() and public.is_event_participant(event_id));
+
+alter publication supabase_realtime add table public.messages;
+alter table public.messages replica identity full;
