@@ -10,12 +10,10 @@ dist-ssr
 *.tsbuildinfo
 
 # Environment variables — segredos NUNCA vão pro git.
-# Exceções: .env.example (template) e .env.production (somente a anon key
-# PÚBLICA, necessária no build do Vite na Vercel; o acesso é protegido por RLS).
+# Use `.env` localmente (já ignorado). Exceção versionada: só o .env.example.
 .env
 .env.*
 !.env.example
-!.env.production
 
 # Logs
 logs
