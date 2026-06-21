@@ -313,9 +313,16 @@ create policy "participants_delete_self"
 --    Publica as tabelas que o front escuta via supabase.channel().
 -- -----------------------------------------------------------------------------
 
-alter publication supabase_realtime add table public.events;
-alter publication supabase_realtime add table public.items;
-alter publication supabase_realtime add table public.participants;
+-- Adiciona à publicação de forma idempotente (não falha se já for membro).
+do $$ begin
+  alter publication supabase_realtime add table public.events;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter publication supabase_realtime add table public.items;
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter publication supabase_realtime add table public.participants;
+exception when duplicate_object then null; end $$;
 
 -- Garante que o payload de UPDATE/DELETE traga a linha antiga (útil em filtros).
 alter table public.events       replica identity full;
@@ -397,5 +404,7 @@ create policy "messages_insert_member"
   to authenticated
   with check (user_id = auth.uid() and public.is_event_participant(event_id));
 
-alter publication supabase_realtime add table public.messages;
+do $$ begin
+  alter publication supabase_realtime add table public.messages;
+exception when duplicate_object then null; end $$;
 alter table public.messages replica identity full;
